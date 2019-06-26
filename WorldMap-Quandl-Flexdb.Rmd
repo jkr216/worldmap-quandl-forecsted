@@ -1,0 +1,175 @@
+---
+title: "World Macro Data Download"
+runtime: shiny
+output:
+  flexdashboard::flex_dashboard:
+    source_code: embed
+    vertical_layout: fill
+    
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(highcharter)
+library(dygraphs)
+library(leaflet)
+library(countrycode)
+library(data.table)
+library(DT)
+library(tidyquant)
+library(timetk)
+library(Quandl)
+library(here)
+# You might want to supply an api key
+Quandl.api_key("d9EidiiDWoFESfdk5nPy")
+
+# load data if pushing to Connect. won't work on shinyapps.io
+load(here("map-data", 'gdp-colored-map.RData'))
+```
+
+Sidebar {.sidebar}
+=========================
+  
+```{r}
+
+helpText("Select an economic time series.")
+
+dataChoices <- c("GDP Per Capita" = "_NY_GDP_PCAP_KN",
+                  "GDP Per Capita Growth" = "_NY_GDP_PCAP_KD_ZG",
+                  "Real Interest Rate" = "_FR_INR_RINR",
+                  "Exchange Rate" = "_PX_REX_REER",
+                  "CPI" = "_FP_CPI_TOTL_ZG",
+                  "Labor Force Part. Rate" = "_SL_TLF_ACTI_ZS")
+
+
+selectInput("indicatorSelect", 
+            "Choose an economic indicator",
+            choices = dataChoices,
+            selected = "GDP Per Capita")
+
+```
+
+
+World Map Time Series {data-orientation=rows}
+=====================================
+
+Row {data-height=650}
+-------------------------------------
+
+### World Map
+
+```{r, echo = FALSE}
+
+leafletOutput("map1")
+
+output$map1 <- renderLeaflet({
+  leaf_world
+  })
+  
+clickedCountry <- eventReactive(input$map1_shape_click, {
+  return(input$map1_shape_click$id)
+})
+
+indicatorValue <- reactive({input$indicatorSelect})
+
+countryData <- reactive({
+  dataSet <- paste("WWDI/", as.character(clickedCountry()), 
+                   as.character(indicatorValue()), 
+                   sep = "")
+
+  Quandl(dataSet, type = "xts")
+}) 
+```
+
+Row {.tabset .tabset-fade}
+-------------------------------------
+
+<!-- ### Economic Time Series -->
+
+<!-- ```{r, echo = FALSE} -->
+
+<!-- renderDygraph({ -->
+
+<!--   validate(need(input$map1_shape_click$id != "",  -->
+<!--                 "Please click on a country to display its ETF price history.")) -->
+
+<!--   indicatorName <- names(dataChoices[dataChoices == input$indicatorSelect]) -->
+
+<!--   countryName<- countrycode(as.character(clickedCountry()), "iso3c", "country.name") -->
+
+<!--   dygraph(countryData(),  -->
+<!--           main = paste(countryName, indicatorName,  -->
+<!--                        sep = " ")) %>% -->
+<!--     dyRangeSelector(height = 20) %>% -->
+<!--     dyShading(from = "2007-12-01", to = "2009-06-01", color = "#FFE6E6") %>%  -->
+<!--     dyEvent(x = "2008-09-15", label = "Fin Crisis", labelLoc = "top", color = "red") -->
+<!-- }) -->
+<!-- ``` -->
+
+
+### Highcharter 
+
+```{r}
+
+renderHighchart({
+
+  validate(need(input$map1_shape_click$id != "",
+                "Please click on a country."))
+  
+  indicatorName1 <- names(dataChoices[dataChoices == input$indicatorSelect])
+  
+  countryName1 <- countrycode(as.character(clickedCountry()), "iso3c", "country.name")
+
+  highchart(type = "stock") %>% 
+    hc_title(text = paste(countryName1, indicatorName1, sep = " ")) %>%
+    hc_add_series(countryData(), name = paste(countryName1, indicatorName1, sep = " "))%>% 
+    # I don't like the look of the navigator/scrollbar, but you might. 
+    # Change these to enabled = TRUE and check out the results.
+    hc_navigator(enabled = FALSE) %>% 
+    hc_scrollbar(enabled = FALSE)
+})
+```
+
+Data and Download
+============================
+
+
+Row 1
+------------------------------
+
+### Data Table Country Indicators 
+
+
+```{r}
+renderDataTable({
+    
+  countryCode <- as.character(clickedCountry())
+  
+  
+  # Start with the vector of Quandl codes
+  dataChoices %>%
+    
+  # Attach the country code to each of them. 
+  map_chr(~paste("WWDI/", countryCode, ., sep="")) %>% 
+  
+  # Pass them to Quandl via map().
+    
+  map(Quandl, type = "xts") %>% 
+  
+  # Use the reduce() function to combine them into one xts objects.
+  reduce(merge) %>% 
+  # Use the names from the original vector to set nicer column names.
+  `colnames<-`(names(dataChoices)) %>% 
+  tk_tbl(preserve_index = TRUE, rename_index = "date") %>%
+  arrange(desc(date)) %>% 
+  mutate_each(funs(./100), c(3,4,6,7)) %>% 
+  datatable(., fillContainer = TRUE, extensions = 'Buttons', 
+            options = list(dom = 'Bfrtip', 
+                           buttons = c('copy', 'csv', 'excel'))) %>% 
+  formatPercentage(c(3, 4, 6, 7), digits = 2) %>% 
+  formatCurrency(c(2, 5), digits = 2)
+  
+    
+  })
+
+```
